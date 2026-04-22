@@ -24,7 +24,7 @@ services:
       - JAEGER_SAMPLE_RATIO
       - LOG_LEVEL
     build: .
-    image: deathstarbench/hotel-reservation:latest
+    image: htliang/hotelreservation-reserve:latest
     entrypoint: frontend
     ports:
       - "5000:5000"
@@ -46,7 +46,7 @@ services:
       - JAEGER_SAMPLE_RATIO
       - LOG_LEVEL
     build: .
-    image: deathstarbench/hotel-reservation:latest
+    image: htliang/hotelreservation-reserve:latest
     entrypoint: profile
     depends_on:
       - mongodb-profile
@@ -68,7 +68,7 @@ services:
       - JAEGER_SAMPLE_RATIO
       - LOG_LEVEL
     build: .
-    image: deathstarbench/hotel-reservation:latest
+    image: htliang/hotelreservation-reserve:latest
     entrypoint: search
     depends_on:
       - consul
@@ -88,7 +88,7 @@ services:
       - JAEGER_SAMPLE_RATIO
       - LOG_LEVEL
     build: .
-    image: deathstarbench/hotel-reservation:latest
+    image: htliang/hotelreservation-reserve:latest
     entrypoint: geo
     depends_on:
       - mongodb-geo
@@ -109,7 +109,7 @@ services:
       - JAEGER_SAMPLE_RATIO
       - LOG_LEVEL
     build: .
-    image: deathstarbench/hotel-reservation:latest
+    image: htliang/hotelreservation-reserve:latest
     entrypoint: rate
     depends_on:
       - mongodb-rate
@@ -164,7 +164,7 @@ services:
       - JAEGER_SAMPLE_RATIO
       - LOG_LEVEL
     build: .
-    image: deathstarbench/hotel-reservation:latest
+    image: htliang/hotelreservation-reserve:latest
     entrypoint: recommendation
     depends_on:
       - mongodb-recommendation
@@ -185,7 +185,7 @@ services:
       - JAEGER_SAMPLE_RATIO
       - LOG_LEVEL
     build: .
-    image: deathstarbench/hotel-reservation:latest
+    image: htliang/hotelreservation-reserve:latest
     entrypoint: user
     depends_on:
       - mongodb-user
@@ -206,7 +206,7 @@ services:
       - JAEGER_SAMPLE_RATIO
       - LOG_LEVEL
     build: .
-    image: deathstarbench/hotel-reservation:latest
+    image: htliang/hotelreservation-reserve:latest
     entrypoint: reservation
     depends_on:
       - mongodb-reservation

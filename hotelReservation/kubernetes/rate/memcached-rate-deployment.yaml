@@ -37,8 +37,8 @@ spec:
             - containerPort: 11211
           resources:
             requests:
-              cpu: 100m
+              cpu: 2000m
             limits:
-              cpu: 1000m
+              cpu: 4000m
       restartPolicy: Always
 status: {}
