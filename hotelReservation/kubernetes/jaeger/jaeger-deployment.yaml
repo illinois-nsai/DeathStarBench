@@ -25,6 +25,8 @@ spec:
       labels:
         io.kompose.service: jaeger
     spec:
+      nodeSelector:
+        type: stateful
       containers:
         - image: jaegertracing/all-in-one:latest
           name: hotel-reserv-jaeger
@@ -42,8 +44,6 @@ spec:
               protocol: UDP
           resources:
             requests:
-              cpu: 2000m
-            limits:
-              cpu: 4000m
+              cpu: 250m
       restartPolicy: Always
 status: {}

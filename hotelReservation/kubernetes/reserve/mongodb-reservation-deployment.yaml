@@ -26,6 +26,8 @@ spec:
       labels:
         io.kompose.service: mongodb-reservation
     spec:
+      nodeSelector:
+        type: stateful
       containers:
         - image: mongo:4.4.6
           name: hotel-reserv-reservation-mongo
@@ -33,9 +35,7 @@ spec:
             - containerPort: 27017
           resources:
             requests:
-              cpu: 2000m
-            limits:
-              cpu: 4000m
+              cpu: 250m
           volumeMounts:
             - mountPath: /data/db
               name: reservation

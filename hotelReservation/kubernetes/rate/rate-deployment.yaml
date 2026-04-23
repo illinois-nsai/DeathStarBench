@@ -25,6 +25,15 @@ spec:
       labels:
         io.kompose.service: rate
     spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: type
+                    operator: NotIn
+                    values:
+                      - stateful
       containers:
         - command:
             - /go/bin/rate
@@ -34,8 +43,8 @@ spec:
             - containerPort: 8084
           resources:
             requests:
-              cpu: 2000m
+              cpu: 250m
             limits:
-              cpu: 4000m
+              cpu: 500m
       restartPolicy: Always
 status: {}

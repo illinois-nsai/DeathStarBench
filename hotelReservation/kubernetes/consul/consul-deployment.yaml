@@ -25,6 +25,8 @@ spec:
       labels:
         io.kompose.service: consul
     spec:
+      nodeSelector:
+        type: stateful
       containers:
         - image: hashicorp/consul:latest
           name: consul
@@ -36,8 +38,6 @@ spec:
               protocol: UDP
           resources:
             requests:
-              cpu: 2000m
-            limits:
-              cpu: 4000m
+              cpu: 250m
       restartPolicy: Always
 status: {}

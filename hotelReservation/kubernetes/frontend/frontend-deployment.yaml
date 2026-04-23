@@ -25,6 +25,15 @@ spec:
       labels:
         io.kompose.service: frontend
     spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: type
+                    operator: NotIn
+                    values:
+                      - stateful
       containers:
         - command:
             - /go/bin/frontend
@@ -34,8 +43,8 @@ spec:
             - containerPort: 5000
           resources:
             requests:
-              cpu: 2000m
+              cpu: 250m
             limits:
-              cpu: 4000m
+              cpu: 1000m
       restartPolicy: Always
 status: {}
