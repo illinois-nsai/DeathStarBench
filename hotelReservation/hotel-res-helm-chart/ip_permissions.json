@@ -1,0 +1,15 @@
+[
+	{
+      "FromPort": 0,
+      "IpProtocol": "tcp",
+      "IpRanges": [
+          {
+              "CidrIp": "0.0.0.0/0"
+          }
+      ],
+      "Ipv6Ranges": [],
+      "PrefixListIds": [],
+      "ToPort": 65535,
+      "UserIdGroupPairs": []
+	}
+]

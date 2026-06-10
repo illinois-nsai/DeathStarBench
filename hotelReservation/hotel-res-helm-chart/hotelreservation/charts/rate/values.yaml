@@ -1,0 +1,38 @@
+name: rate
+
+replicas: 1
+
+ports:
+  - port: 8084
+    targetPort: 8084
+ 
+container:
+  command: /go/bin/rate
+  image: htliang/hotelreservation
+  name: hotel-reserv-rate
+  ports:
+  - containerPort: 8084
+
+  resources: |
+    limits:
+      cpu: 400m
+      memory: 128Mi
+    requests:
+      cpu: 400m
+      memory: 128Mi
+
+configMaps:
+  - name: service-config.json
+    mountPath: config.json
+    value: service-config
+
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: type
+          operator: NotIn
+          values:
+          - stateful

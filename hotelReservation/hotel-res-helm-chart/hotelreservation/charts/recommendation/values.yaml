@@ -1,0 +1,38 @@
+name: recommendation
+
+replicas: 1
+
+ports:
+  - port: 8085
+    targetPort: 8085
+ 
+container:
+  command: /go/bin/recommendation
+  image: htliang/hotelreservation
+  name: hotel-reserv-recommendation
+  ports:
+  - containerPort: 8085
+
+  resources: |
+    limits:
+      cpu: 400m
+      memory: 128Mi
+    requests:
+      cpu: 400m
+      memory: 128Mi
+
+configMaps:
+  - name: service-config.json
+    mountPath: config.json
+    value: service-config
+
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: type
+          operator: NotIn
+          values:
+          - stateful

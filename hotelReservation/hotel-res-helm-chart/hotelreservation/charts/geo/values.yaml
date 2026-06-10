@@ -1,0 +1,37 @@
+name: geo
+
+replicas: 1
+
+ports:
+  - port: 8083
+    targetPort: 8083
+ 
+container:
+  command: /go/bin/geo
+  image: htliang/hotelreservation
+  name: hotel-reserv-geo
+  ports:
+  - containerPort: 8083
+
+  resources: |
+    limits:
+      cpu: 400m
+      memory: 128Mi
+    requests:
+      cpu: 400m
+      memory: 128Mi
+
+configMaps:
+  - name: service-config.json
+    mountPath: config.json
+    value: service-config
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: type
+          operator: NotIn
+          values:
+          - stateful

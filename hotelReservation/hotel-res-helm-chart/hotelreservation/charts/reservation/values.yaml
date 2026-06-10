@@ -1,0 +1,38 @@
+name: reservation
+
+replicas: 1
+
+ports:
+  - port: 8087
+    targetPort: 8087
+ 
+container:
+  command: /go/bin/reservation
+  image: htliang/hotelreservation
+  name: hotel-reserv-reservation
+  ports:
+  - containerPort: 8087
+
+  resources: |
+    limits:
+      cpu: 400m
+      memory: 128Mi
+    requests:
+      cpu: 400m
+      memory: 128Mi
+
+configMaps:
+  - name: service-config.json
+    mountPath: config.json
+    value: service-config
+
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: type
+          operator: NotIn
+          values:
+          - stateful
