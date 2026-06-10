@@ -8,7 +8,7 @@ ports:
  
 container:
   command: /go/bin/user
-  image: htliang/hotelreservation
+  image: htliang/hotelreservation-new-rate
   name: hotel-reserv-user
   ports:
   - containerPort: 8086

@@ -11,7 +11,7 @@ replicas: 1
 
 container:
   command: /go/bin/frontend
-  image: htliang/hotelreservation
+  image: htliang/hotelreservation-new-rate
   name: hotel-reserv-frontend
   ports:
   - containerPort: 5000

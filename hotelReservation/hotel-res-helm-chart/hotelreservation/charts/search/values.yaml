@@ -8,7 +8,7 @@ ports:
     
 container:
   command: /go/bin/search
-  image: htliang/hotelreservation
+  image: htliang/hotelreservation-new-rate
   name: hotel-reserv-search
   ports:
   - containerPort: 8082
