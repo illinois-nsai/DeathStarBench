@@ -8,6 +8,7 @@ appVersion: "1.16.0"
 dependencies:
   - name: consul
     version: 0.1.0
+    condition: consul.enabled
   - name: frontend
     version: 0.1.0
   - name: geo

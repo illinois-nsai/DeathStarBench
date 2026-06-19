@@ -8,7 +8,7 @@ ports:
  
 container:
   command: /go/bin/reservation
-  image: htliang/hotelreservation-new-rate
+  image: htliang/hotelreservation-remove-consul
   name: hotel-reserv-reservation
   ports:
   - containerPort: 8087

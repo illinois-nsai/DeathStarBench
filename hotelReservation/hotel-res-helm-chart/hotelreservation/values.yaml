@@ -3,7 +3,7 @@ global:
   fullnameOverride: ""
   mainChart: hotelres
   replicas: 1
-  imagePullPolicy: "IfNotPresent"
+  imagePullPolicy: "Always"
   restartPolicy: Always
   serviceType: ClusterIP
   dockerRegistry: docker.io
@@ -38,6 +38,8 @@ global:
       pvprovisioner:
         enabled: false
         storageClassName: ceph-fs   # optional
+consul:
+  enabled: false
   # resources: |
   #   requests:
   #     cpu: "100m"
