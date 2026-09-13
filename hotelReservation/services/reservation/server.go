@@ -127,8 +127,14 @@ func (s *Server) MakeReservation(ctx context.Context, req *pb.Request) (*pb.Resu
 			log.Trace().Msgf("memcached hit %s = %d", memc_key, count)
 			memc_date_num_map[memc_key] = count + int(req.RoomNumber)
 
-		} else if err == memcache.ErrCacheMiss {
-			// memcached miss
+		} else {
+			// memcached miss, or any other memcached failure - a timeout, a reset
+			// connection. Both fall through to mongo. Upstream panicked on
+			// anything but ErrCacheMiss, so one slow cache read killed the whole
+			// process and every request in flight with it.
+			if err != memcache.ErrCacheMiss {
+				log.Warn().Msgf("Tried to get memc_key [%v], but got memmcached error = %s; treating as a cache miss", memc_key, err)
+			}
 			log.Trace().Msgf("memcached miss")
 			var reserve []reservation
 
@@ -147,9 +153,6 @@ func (s *Server) MakeReservation(ctx context.Context, req *pb.Request) (*pb.Resu
 			}
 
 			memc_date_num_map[memc_key] = count + int(req.RoomNumber)
-
-		} else {
-			log.Panic().Msgf("Tried to get memc_key [%v], but got memmcached error = %s", memc_key, err)
 		}
 
 		// check capacity
@@ -161,8 +164,11 @@ func (s *Server) MakeReservation(ctx context.Context, req *pb.Request) (*pb.Resu
 			// memcached hit
 			hotel_cap, _ = strconv.Atoi(string(item.Value))
 			log.Trace().Msgf("memcached hit %s = %d", memc_cap_key, hotel_cap)
-		} else if err == memcache.ErrCacheMiss {
-			// memcached miss
+		} else {
+			// memcached miss or failure; see the note above.
+			if err != memcache.ErrCacheMiss {
+				log.Warn().Msgf("Tried to get memc_cap_key [%v], but got memmcached error = %s; treating as a cache miss", memc_cap_key, err)
+			}
 			var num number
 			err = numCollection.FindOne(context.TODO(), &bson.D{{"hotelId", hotelId}}).Decode(&num)
 			if err != nil {
@@ -172,8 +178,6 @@ func (s *Server) MakeReservation(ctx context.Context, req *pb.Request) (*pb.Resu
 
 			// write to memcache
 			s.MemcClient.Set(&memcache.Item{Key: memc_cap_key, Value: []byte(strconv.Itoa(hotel_cap))})
-		} else {
-			log.Panic().Msgf("Tried to get memc_cap_key [%v], but got memmcached error = %s", memc_cap_key, err)
 		}
 
 		if count+int(req.RoomNumber) > hotel_cap {
@@ -240,15 +244,19 @@ func (s *Server) CheckAvailability(ctx context.Context, req *pb.Request) (*pb.Re
 	numCollection := s.MongoClient.Database("reservation-db").Collection("number")
 
 	misKeys := []string{}
-	// gather cache miss key to query in mongodb
-	if err == memcache.ErrCacheMiss {
-		for key := range keysMap {
-			if _, ok := cacheMemRes[key]; !ok {
-				misKeys = append(misKeys, key)
-			}
+	if err != nil && err != memcache.ErrCacheMiss {
+		log.Warn().Msgf("Tried to get memc_cap_key [%v], but got memmcached error = %s; treating missing keys as cache misses", hotelMemKeys, err)
+	}
+
+	// Gather cache-miss keys to query in mongodb. This runs unconditionally,
+	// including when err == nil: GetMulti reports a partial hit as a nil error
+	// with only the keys it found, so absence from cacheMemRes is the only
+	// reliable signal. On a timeout cacheMemRes is nil, and reading a nil map is
+	// safe in Go, so the same loop then collects every requested key.
+	for key := range keysMap {
+		if _, ok := cacheMemRes[key]; !ok {
+			misKeys = append(misKeys, key)
 		}
-	} else if err != nil {
-		log.Panic().Msgf("Tried to get memc_cap_key [%v], but got memmcached error = %s", hotelMemKeys, err)
 	}
 	// store whole capacity result in cacheCap
 	cacheCap := make(map[string]int)
@@ -315,86 +323,100 @@ func (s *Server) CheckAvailability(ctx context.Context, req *pb.Request) (*pb.Re
 	ch := make(chan taskRes)
 	reserveMemSpan.SetTag("span.kind", "client")
 	// check capacity in memcached and mongodb
-	if itemsMap, err := s.MemcClient.GetMulti(reqCommand); err != nil && err != memcache.ErrCacheMiss {
-		reserveMemSpan.Finish()
-		log.Panic().Msgf("Tried to get memc_key [%v], but got memmcached error = %s", reqCommand, err)
-	} else {
-		reserveMemSpan.Finish()
-		// go through reservation count from memcached
-		go func() {
-			for k, v := range itemsMap {
-				id := strings.Split(k, "_")[0]
-				val, _ := strconv.Atoi(string(v.Value))
-				var res bool
-				if val+int(req.RoomNumber) <= cacheCap[id] {
-					res = true
-				}
-				ch <- taskRes{
-					hotelId:  id,
-					checkRes: res,
-				}
+	itemsMap, err := s.MemcClient.GetMulti(reqCommand)
+	reserveMemSpan.Finish()
+	// A memcached failure is handled exactly like a cache miss. Note the channel
+	// close below: `ch` is closed either by the hit goroutine when err == nil or
+	// by the WaitGroup goroutine on the miss path. A timeout matched neither, so
+	// without routing it to the miss path nothing would ever close `ch` and the
+	// consumer would block forever.
+	if err != nil && err != memcache.ErrCacheMiss {
+		log.Warn().Msgf("Tried to get memc_key [%v], but got memmcached error = %s; treating as a cache miss", reqCommand, err)
+	}
+
+	// Cache hits are answered straight from itemsMap; whatever is left in queryMap
+	// once those are removed has to come from mongo. Both groups of senders are
+	// tracked by one WaitGroup, so `ch` is closed exactly once, after the last
+	// send.
+	//
+	// Upstream closed `ch` from the hit goroutine when err == nil and from the
+	// mongo path when err == ErrCacheMiss. That left three holes: a partial hit
+	// (nil error, only some keys returned) never consulted mongo; a memcached
+	// timeout matched neither branch so nothing closed the channel and the
+	// consumer blocked forever; and when both paths had work, the mongo path
+	// could close `ch` while the hit goroutine was still sending to it.
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for k, v := range itemsMap {
+			id := strings.Split(k, "_")[0]
+			val, _ := strconv.Atoi(string(v.Value))
+			var res bool
+			if val+int(req.RoomNumber) <= cacheCap[id] {
+				res = true
 			}
-			if err == nil {
-				close(ch)
-			}
-		}()
-		// use miss reservation to get data from mongo
-		// rever string to indata and outdate
-		if err == memcache.ErrCacheMiss {
-			var wg sync.WaitGroup
-			for k := range itemsMap {
-				delete(queryMap, k)
-			}
-			wg.Add(len(queryMap))
-			go func() {
-				wg.Wait()
-				close(ch)
-			}()
-			for command := range queryMap {
-				go func(comm string) {
-					defer wg.Done()
-
-					var reserve []reservation
-
-					queryItem := queryMap[comm]
-					resCollection := s.MongoClient.Database("reservation-db").Collection("reservation")
-					filter := bson.D{{"hotelId", queryItem["hotelId"]}, {"inDate", queryItem["startDate"]}, {"outDate", queryItem["endDate"]}}
-
-					reserveMongoSpan, _ := opentracing.StartSpanFromContext(ctx, "mongodb_capacity_get_multi_number"+comm)
-					reserveMongoSpan.SetTag("span.kind", "client")
-					curr, err := resCollection.Find(context.TODO(), filter)
-					if err != nil {
-						log.Error().Msgf("Failed get reservation data: ", err)
-					}
-					curr.All(context.TODO(), &reserve)
-					if err != nil {
-						log.Error().Msgf("Failed get reservation data: ", err)
-					}
-					reserveMongoSpan.Finish()
-
-					if err != nil {
-						log.Panic().Msgf("Tried to find hotelId [%v] from date [%v] to date [%v], but got error",
-							queryItem["hotelId"], queryItem["startDate"], queryItem["endDate"], err.Error())
-					}
-					var count int
-					for _, r := range reserve {
-						log.Trace().Msgf("reservation check reservation number = %d", queryItem["hotelId"])
-						count += r.Number
-					}
-					// update memcached
-					go s.MemcClient.Set(&memcache.Item{Key: comm, Value: []byte(strconv.Itoa(count))})
-					var res bool
-					if count+int(req.RoomNumber) <= cacheCap[queryItem["hotelId"]] {
-						res = true
-					}
-					ch <- taskRes{
-						hotelId:  queryItem["hotelId"],
-						checkRes: res,
-					}
-				}(command)
+			ch <- taskRes{
+				hotelId:  id,
+				checkRes: res,
 			}
 		}
+	}()
+
+	// Remove cache hits from queryMap; whatever remains must go to mongo.
+	// rever string to indata and outdate
+	for k := range itemsMap {
+		delete(queryMap, k)
 	}
+	wg.Add(len(queryMap))
+	for command := range queryMap {
+		go func(comm string) {
+			defer wg.Done()
+
+			var reserve []reservation
+
+			queryItem := queryMap[comm]
+			resCollection := s.MongoClient.Database("reservation-db").Collection("reservation")
+			filter := bson.D{{"hotelId", queryItem["hotelId"]}, {"inDate", queryItem["startDate"]}, {"outDate", queryItem["endDate"]}}
+
+			reserveMongoSpan, _ := opentracing.StartSpanFromContext(ctx, "mongodb_capacity_get_multi_number"+comm)
+			reserveMongoSpan.SetTag("span.kind", "client")
+			curr, err := resCollection.Find(context.TODO(), filter)
+			if err != nil {
+				log.Error().Msgf("Failed get reservation data: ", err)
+			}
+			curr.All(context.TODO(), &reserve)
+			if err != nil {
+				log.Error().Msgf("Failed get reservation data: ", err)
+			}
+			reserveMongoSpan.Finish()
+
+			if err != nil {
+				log.Panic().Msgf("Tried to find hotelId [%v] from date [%v] to date [%v], but got error",
+					queryItem["hotelId"], queryItem["startDate"], queryItem["endDate"], err.Error())
+			}
+			var count int
+			for _, r := range reserve {
+				log.Trace().Msgf("reservation check reservation number = %d", queryItem["hotelId"])
+				count += r.Number
+			}
+			// update memcached
+			go s.MemcClient.Set(&memcache.Item{Key: comm, Value: []byte(strconv.Itoa(count))})
+			var res bool
+			if count+int(req.RoomNumber) <= cacheCap[queryItem["hotelId"]] {
+				res = true
+			}
+			ch <- taskRes{
+				hotelId:  queryItem["hotelId"],
+				checkRes: res,
+			}
+		}(command)
+	}
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
 
 	for task := range ch {
 		if !task.checkRes {

@@ -112,50 +112,53 @@ func (s *Server) GetProfiles(ctx context.Context, req *pb.Request) (*pb.Result, 
 	res := new(pb.Result)
 	hotels := make([]*pb.Hotel, 0)
 
+	// A memcached failure is handled exactly like a cache miss: fall through to
+	// mongo. Upstream panicked on anything but ErrCacheMiss, so one slow cache
+	// read killed the whole process and every request in flight with it.
 	if err != nil && err != memcache.ErrCacheMiss {
-		log.Panic().Msgf("Tried to get hotelIds [%v], but got memmcached error = %s", hotelIds, err)
-	} else {
-		for hotelId, item := range resMap {
-			profileStr := string(item.Value)
-			log.Trace().Msgf("memc hit with %v", profileStr)
+		log.Warn().Msgf("Tried to get hotelIds [%v], but got memmcached error = %s; treating as a cache miss", hotelIds, err)
+	}
 
-			hotelProf := new(pb.Hotel)
-			json.Unmarshal(item.Value, hotelProf)
+	for hotelId, item := range resMap {
+		profileStr := string(item.Value)
+		log.Trace().Msgf("memc hit with %v", profileStr)
+
+		hotelProf := new(pb.Hotel)
+		json.Unmarshal(item.Value, hotelProf)
+		hotels = append(hotels, hotelProf)
+		delete(profileMap, hotelId)
+	}
+
+	wg.Add(len(profileMap))
+	for hotelId := range profileMap {
+		go func(hotelId string) {
+			var hotelProf *pb.Hotel
+
+			collection := s.MongoClient.Database("profile-db").Collection("hotels")
+
+			mongoSpan, _ := opentracing.StartSpanFromContext(ctx, "mongo_profile")
+			mongoSpan.SetTag("span.kind", "client")
+			err := collection.FindOne(context.TODO(), bson.D{{"id", hotelId}}).Decode(&hotelProf)
+			mongoSpan.Finish()
+
+			if err != nil {
+				log.Error().Msgf("Failed get hotels data: ", err)
+			}
+
+			mutex.Lock()
 			hotels = append(hotels, hotelProf)
-			delete(profileMap, hotelId)
-		}
+			mutex.Unlock()
 
-		wg.Add(len(profileMap))
-		for hotelId := range profileMap {
-			go func(hotelId string) {
-				var hotelProf *pb.Hotel
+			profJson, err := json.Marshal(hotelProf)
+			if err != nil {
+				log.Error().Msgf("Failed to marshal hotel [id: %v] with err:", hotelProf.Id, err)
+			}
+			memcStr := string(profJson)
 
-				collection := s.MongoClient.Database("profile-db").Collection("hotels")
-
-				mongoSpan, _ := opentracing.StartSpanFromContext(ctx, "mongo_profile")
-				mongoSpan.SetTag("span.kind", "client")
-				err := collection.FindOne(context.TODO(), bson.D{{"id", hotelId}}).Decode(&hotelProf)
-				mongoSpan.Finish()
-
-				if err != nil {
-					log.Error().Msgf("Failed get hotels data: ", err)
-				}
-
-				mutex.Lock()
-				hotels = append(hotels, hotelProf)
-				mutex.Unlock()
-
-				profJson, err := json.Marshal(hotelProf)
-				if err != nil {
-					log.Error().Msgf("Failed to marshal hotel [id: %v] with err:", hotelProf.Id, err)
-				}
-				memcStr := string(profJson)
-
-				// write to memcached
-				go s.MemcClient.Set(&memcache.Item{Key: hotelId, Value: []byte(memcStr)})
-				defer wg.Done()
-			}(hotelId)
-		}
+			// write to memcached
+			go s.MemcClient.Set(&memcache.Item{Key: hotelId, Value: []byte(memcStr)})
+			defer wg.Done()
+		}(hotelId)
 	}
 	wg.Wait()
 

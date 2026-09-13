@@ -120,53 +120,58 @@ func (s *Server) GetReviews(ctx context.Context, req *pb.Request) (*pb.Result, e
 	memSpan.SetTag("span.kind", "client")
 	item, err := s.MemcClient.Get(hotelId)
 	memSpan.Finish()
+	// A memcached failure is handled exactly like a cache miss: fall through to
+	// mongo. Upstream panicked on anything but ErrCacheMiss, so one slow cache
+	// read killed the whole process and every request in flight with it.
 	if err != nil && err != memcache.ErrCacheMiss {
-		log.Panic().Msgf("Tried to get hotelId [%v], but got memmcached error = %s", hotelId, err)
+		log.Warn().Msgf("Tried to get hotelId [%v], but got memmcached error = %s; treating as a cache miss", hotelId, err)
+	}
+
+	// Any error, not just ErrCacheMiss: on a timeout `item` is nil, so the hit
+	// branch below would dereference it.
+	if err != nil {
+		mongoSpan, _ := opentracing.StartSpanFromContext(ctx, "mongo_review")
+		mongoSpan.SetTag("span.kind", "client")
+
+		//session := s.MongoSession.Copy()
+		//defer session.Close()
+		//c := session.DB("review-db").C("reviews")
+		c := s.MongoClient.Database("review-db").Collection("reviews")
+
+		curr, err := c.Find(context.TODO(), bson.M{"hotelId": hotelId})
+		if err != nil {
+			log.Error().Msgf("Failed get reviews: ", err)
+		}
+
+		var reviewHelpers []ReviewHelper
+		//err = c.Find(bson.M{"hotelId": hotelId}).All(&reviewHelpers)
+		curr.All(context.TODO(), &reviewHelpers)
+		if err != nil {
+			log.Error().Msgf("Failed get hotels data: ", err)
+		}
+
+		for _, reviewHelper := range reviewHelpers {
+			revComm := pb.ReviewComm{
+				ReviewId:    reviewHelper.ReviewId,
+				Name:        reviewHelper.Name,
+				Rating:      reviewHelper.Rating,
+				Description: reviewHelper.Description,
+				Images:      reviewHelper.Image}
+			reviews = append(reviews, &revComm)
+		}
+
+		reviewJson, err := json.Marshal(reviews)
+		if err != nil {
+			log.Error().Msgf("Failed to marshal hotel [id: %v] with err:", hotelId, err)
+		}
+		memcStr := string(reviewJson)
+
+		s.MemcClient.Set(&memcache.Item{Key: hotelId, Value: []byte(memcStr)})
 	} else {
-		if err == memcache.ErrCacheMiss {
-			mongoSpan, _ := opentracing.StartSpanFromContext(ctx, "mongo_review")
-			mongoSpan.SetTag("span.kind", "client")
-
-			//session := s.MongoSession.Copy()
-			//defer session.Close()
-			//c := session.DB("review-db").C("reviews")
-			c := s.MongoClient.Database("review-db").Collection("reviews")
-
-			curr, err := c.Find(context.TODO(), bson.M{"hotelId": hotelId})
-			if err != nil {
-				log.Error().Msgf("Failed get reviews: ", err)
-			}
-
-			var reviewHelpers []ReviewHelper
-			//err = c.Find(bson.M{"hotelId": hotelId}).All(&reviewHelpers)
-			curr.All(context.TODO(), &reviewHelpers)
-			if err != nil {
-				log.Error().Msgf("Failed get hotels data: ", err)
-			}
-
-			for _, reviewHelper := range reviewHelpers {
-				revComm := pb.ReviewComm{
-					ReviewId:    reviewHelper.ReviewId,
-					Name:        reviewHelper.Name,
-					Rating:      reviewHelper.Rating,
-					Description: reviewHelper.Description,
-					Images:      reviewHelper.Image}
-				reviews = append(reviews, &revComm)
-			}
-
-			reviewJson, err := json.Marshal(reviews)
-			if err != nil {
-				log.Error().Msgf("Failed to marshal hotel [id: %v] with err:", hotelId, err)
-			}
-			memcStr := string(reviewJson)
-
-			s.MemcClient.Set(&memcache.Item{Key: hotelId, Value: []byte(memcStr)})
-		} else {
-			reviewsStr := string(item.Value)
-			log.Trace().Msgf("memc hit with %v", reviewsStr)
-			if err := json.Unmarshal([]byte(reviewsStr), &reviews); err != nil {
-				log.Panic().Msgf("Failed to unmarshal reviews: %s", err)
-			}
+		reviewsStr := string(item.Value)
+		log.Trace().Msgf("memc hit with %v", reviewsStr)
+		if err := json.Unmarshal([]byte(reviewsStr), &reviews); err != nil {
+			log.Error().Msgf("Failed to unmarshal reviews: %s", err)
 		}
 	}
 
