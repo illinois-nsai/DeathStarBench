@@ -59,6 +59,7 @@ func main() {
 	log.Info().Msg("Consul agent initialized")
 
 	srv := &search.Server{
+		Config:     result,
 		Tracer:     tracer,
 		Port:       servPort,
 		IpAddr:     servIP,

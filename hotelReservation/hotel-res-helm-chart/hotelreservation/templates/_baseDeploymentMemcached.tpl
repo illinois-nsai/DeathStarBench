@@ -72,6 +72,24 @@ spec:
           {{ tpl $.Values.global.resources $ | nindent 10 | trim }}
         {{- end }}
       {{- end -}}
+      {{- if $.Values.global.memcached.exporter }}
+      {{- with $.Values.global.memcached.exporter }}
+      # Exports memcached's own get_hits/get_misses counters. Without them the
+      # cache hit rate is invisible, and it hides inside the load variable: a
+      # higher request rate fills the cache faster during a fixed warm-up, so the
+      # same configuration measures a cheaper request at higher load.
+      - name: memcached-exporter
+        image: {{ .image }}:{{ .imageVersion }}
+        imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+        args:
+        - "--memcached.address=127.0.0.1:11211"
+        - "--web.listen-address=:{{ .port }}"
+        ports:
+        - containerPort: {{ .port }}
+        resources:
+          {{ tpl .resources $ | nindent 10 | trim }}
+      {{- end }}
+      {{- end }}
       {{- if hasKey .Values "topologySpreadConstraints" }}
       topologySpreadConstraints:
         {{ tpl .Values.topologySpreadConstraints . | nindent 6 | trim }}

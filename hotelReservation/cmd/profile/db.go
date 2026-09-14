@@ -7,6 +7,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/bson"
+	"github.com/delimitrou/DeathStarBench/tree/master/hotelReservation/seed"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -170,7 +172,18 @@ func initializeDatabase(url string) (*mongo.Client, func()) {
 	log.Info().Msg("Successfully connected to MongoDB")
 
 	collection := client.Database("profile-db").Collection("hotels")
-	_, err = collection.InsertMany(context.TODO(), newProfiles)
+
+	if err := seed.EnsureUniqueIndex(context.TODO(), collection, "id"); err != nil {
+		log.Panic().Msg(err.Error())
+	}
+
+	docs := make([]seed.Doc, 0, len(newProfiles))
+	for _, profile := range newProfiles {
+		h := profile.(Hotel)
+		docs = append(docs, seed.Doc{Filter: bson.M{"id": h.Id}, Value: h})
+	}
+
+	err = seed.Upsert(context.TODO(), collection, docs)
 	if err != nil {
 		log.Fatal().Msg(err.Error())
 	}

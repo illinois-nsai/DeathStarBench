@@ -139,13 +139,12 @@ func (s *Server) MakeReservation(ctx context.Context, req *pb.Request) (*pb.Resu
 			var reserve []reservation
 
 			filter := bson.D{{"hotelId", hotelId}, {"inDate", indate}, {"outDate", outdate}}
+			// Find returns a nil cursor with its error; calling All on it panics.
 			curr, err := resCollection.Find(context.TODO(), filter)
 			if err != nil {
-				log.Error().Msgf("Failed get reservation data: ", err)
-			}
-			curr.All(context.TODO(), &reserve)
-			if err != nil {
-				log.Panic().Msgf("Tried to find hotelId [%v] from date [%v] to date [%v], but got error", hotelId, indate, outdate, err.Error())
+				log.Error().Msgf("Failed to query reservations for hotel %v %v-%v: %v", hotelId, indate, outdate, err)
+			} else if err := curr.All(context.TODO(), &reserve); err != nil {
+				log.Error().Msgf("Failed to decode reservations for hotel %v %v-%v: %v", hotelId, indate, outdate, err)
 			}
 
 			for _, r := range reserve {
@@ -272,18 +271,25 @@ func (s *Server) CheckAvailability(ctx context.Context, req *pb.Request) (*pb.Re
 		var nums []number
 		capMongoSpan, _ := opentracing.StartSpanFromContext(ctx, "mongodb_capacity_get_multi_number")
 		capMongoSpan.SetTag("span.kind", "client")
-		curr, err := numCollection.Find(context.TODO(), bson.D{{"$in", queryMissKeys}})
+		// Two upstream bugs, both only reachable now that misKeys is populated
+		// correctly - previously this whole block was dead code because the miss
+		// list was only filled on memcache.ErrCacheMiss, which GetMulti never
+		// returns.
+		//
+		// 1. bson.D{{"$in", ...}} is not a filter. $in is an operator and has to
+		//    sit under the field it constrains, so mongo rejected the query.
+		// 2. Find returns a nil cursor alongside its error, and the error was
+		//    only logged before curr.All was called on it regardless - a nil
+		//    dereference that took the whole process down:
+		//       mongo.(*Cursor).All(0x0, ...) services/reservation/server.go:279
+		filter := bson.D{{"hotelId", bson.D{{"$in", queryMissKeys}}}}
+		curr, err := numCollection.Find(context.TODO(), filter)
 		if err != nil {
-			log.Error().Msgf("Failed get reservation number data: ", err)
-		}
-		curr.All(context.TODO(), &nums)
-		if err != nil {
-			log.Error().Msgf("Failed get reservation number data: ", err)
+			log.Error().Msgf("Failed to query reservation capacity for %v: %v", misKeys, err)
+		} else if err := curr.All(context.TODO(), &nums); err != nil {
+			log.Error().Msgf("Failed to decode reservation capacity for %v: %v", misKeys, err)
 		}
 		capMongoSpan.Finish()
-		if err != nil {
-			log.Panic().Msgf("Tried to find hotelId [%v], but got error", misKeys, err.Error())
-		}
 		for _, num := range nums {
 			cacheCap[num.HotelId] = num.Number
 			// we don't care set successfully or not
@@ -382,20 +388,14 @@ func (s *Server) CheckAvailability(ctx context.Context, req *pb.Request) (*pb.Re
 
 			reserveMongoSpan, _ := opentracing.StartSpanFromContext(ctx, "mongodb_capacity_get_multi_number"+comm)
 			reserveMongoSpan.SetTag("span.kind", "client")
+			// Same nil-cursor pattern as above.
 			curr, err := resCollection.Find(context.TODO(), filter)
 			if err != nil {
-				log.Error().Msgf("Failed get reservation data: ", err)
-			}
-			curr.All(context.TODO(), &reserve)
-			if err != nil {
-				log.Error().Msgf("Failed get reservation data: ", err)
+				log.Error().Msgf("Failed to query reservations for %v: %v", queryItem, err)
+			} else if err := curr.All(context.TODO(), &reserve); err != nil {
+				log.Error().Msgf("Failed to decode reservations for %v: %v", queryItem, err)
 			}
 			reserveMongoSpan.Finish()
-
-			if err != nil {
-				log.Panic().Msgf("Tried to find hotelId [%v] from date [%v] to date [%v], but got error",
-					queryItem["hotelId"], queryItem["startDate"], queryItem["endDate"], err.Error())
-			}
 			var count int
 			for _, r := range reserve {
 				log.Trace().Msgf("reservation check reservation number = %d", queryItem["hotelId"])

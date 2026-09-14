@@ -3,7 +3,9 @@ global:
   fullnameOverride: ""
   mainChart: hotelres
   replicas: 1
-  imagePullPolicy: "Always"
+  # IfNotPresent, not Always: the image is built locally and imported straight
+  # into containerd on each node, so there is no registry to pull it from.
+  imagePullPolicy: "IfNotPresent"
   restartPolicy: Always
   serviceType: ClusterIP
   dockerRegistry: docker.io
@@ -25,9 +27,28 @@ global:
   nodeSelector: {}
   memcached:
     HACount: 1
+    # Scraped by the existing kubernetes-pods Prometheus job, which keeps any pod
+    # carrying prometheus.io/scrape - so no scrape-config change is needed. The
+    # per-chart annotations set that; see charts/memcached-*/values.yaml.
+    exporter:
+      image: prom/memcached-exporter
+      imageVersion: v0.14.2
+      port: 9150
+      resources: |
+        limits:
+          cpu: 200m
+          memory: 64Mi
+        requests:
+          cpu: 50m
+          memory: 32Mi
     environments:
+      # Back to the stock 128 MiB. Measured working set with the exporter:
+      # reserve 1596 items / 0.128 MiB, rate 65 / 0.335 MiB, profile 27 / 0.014
+      # MiB, and zero evictions on all three. 128 is ~1000x the working set, so
+      # the size is not what governs warm-up - the cache is warm once every key
+      # has been fetched once, which is a function of request rate, not capacity.
       MEMCACHED_CACHE_SIZE: "128"
-      MEMCACHED_THREADS: "2"
+      MEMCACHED_THREADS: "8"
   mongodb:
     persistentVolume:               # use hostPath or pvprovisioner
       enabled: false

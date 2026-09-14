@@ -10,6 +10,7 @@ COPY cmd/ cmd/
 COPY dialer/ dialer/
 COPY registry/ registry/
 COPY services/ services/
+COPY seed/ seed/
 COPY tls/ tls/
 COPY tracing/ tracing/
 COPY tune/ tune/

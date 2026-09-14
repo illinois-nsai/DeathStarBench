@@ -7,6 +7,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/bson"
+	"github.com/delimitrou/DeathStarBench/tree/master/hotelReservation/seed"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -130,7 +132,30 @@ func initializeDatabase(url string) (*mongo.Client, func()) {
 	log.Info().Msg("Successfully connected to MongoDB")
 
 	collection := client.Database("rate-db").Collection("inventory")
-	_, err = collection.InsertMany(context.TODO(), newRatePlans)
+
+	// A rate plan is identified by its hotel, plan code and date range. Without
+	// this every replica inserted the whole set again; see package seed.
+	if err := seed.EnsureUniqueIndex(
+		context.TODO(), collection, "hotelId", "code", "inDate", "outDate",
+	); err != nil {
+		log.Panic().Msg(err.Error())
+	}
+
+	docs := make([]seed.Doc, 0, len(newRatePlans))
+	for _, plan := range newRatePlans {
+		p := plan.(RatePlan)
+		docs = append(docs, seed.Doc{
+			Filter: bson.M{
+				"hotelId": p.HotelId,
+				"code":    p.Code,
+				"inDate":  p.InDate,
+				"outDate": p.OutDate,
+			},
+			Value: p,
+		})
+	}
+
+	err = seed.Upsert(context.TODO(), collection, docs)
 	if err != nil {
 		log.Fatal().Msg(err.Error())
 	}

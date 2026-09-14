@@ -11,7 +11,7 @@ replicas: 1
 
 container:
   command: /go/bin/frontend
-  image: htliang/hotelreservation-remove-consul
+  image: library/hotelreservation-memcfix
   name: hotel-reserv-frontend
   ports:
   - containerPort: 5000

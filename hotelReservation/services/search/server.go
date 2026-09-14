@@ -35,6 +35,7 @@ type Server struct {
 	Port       int
 	IpAddr     string
 	ConsulAddr string
+	Config     map[string]string
 	KnativeDns string
 	Registry   *registry.Client
 }
@@ -111,18 +112,37 @@ func (s *Server) initRateClient(name string) error {
 	return nil
 }
 
-func (s *Server) getGprcConn(name string) (*grpc.ClientConn, error) {
-	if s.KnativeDns != "" {
-		return dialer.Dial(
-			fmt.Sprintf("consul://%s/%s.%s", s.ConsulAddr, name, s.KnativeDns),
-			dialer.WithTracer(s.Tracer))
-	} else {
-		return dialer.Dial(
-			fmt.Sprintf("consul://%s/%s", s.ConsulAddr, name),
-			dialer.WithTracer(s.Tracer),
-			dialer.WithBalancer(s.Registry.Client),
-		)
+// getGprcConn resolves a peer through Kubernetes DNS rather than consul.
+//
+// Upstream dials "consul://<addr>/<name>", which needs a consul agent to resolve
+// the name to pod IPs and then load-balances client-side. This chart does not
+// deploy consul (Chart.yaml gates it behind consul.enabled), so every dial failed
+// with "lookup consul-hotelres: no such host" and requests hung forever - the
+// frontend answered nothing while reporting no errors.
+//
+// Dialling the Service name instead puts load balancing back where every
+// measurement in this project assumes it is: the istio sidecar. Addresses come
+// from config.json alongside the mongo and memcached ones; a name with no entry
+// falls back to the bare name so an unconfigured peer fails loudly at dial time
+// instead of silently resolving to something else.
+func (s *Server) peerAddr(name string) string {
+	if addr := s.Config[name]; addr != "" {
+		return addr
 	}
+
+	return name
+}
+
+func (s *Server) getGprcConn(name string) (*grpc.ClientConn, error) {
+	// Explicit dns:/// scheme. A bare "search-hotelres:8082" parses as scheme
+	// "search-hotelres", and grpc only reaches the right place by falling back to
+	// passthrough when that scheme has no registered resolver - behaviour worth
+	// not depending on. dns:/// also re-resolves, so a recreated Service is picked
+	// up without a restart.
+	return dialer.Dial(
+		"dns:///"+s.peerAddr(name),
+		dialer.WithTracer(s.Tracer),
+	)
 }
 
 // Nearby returns ids of nearby hotels ordered by ranking algo

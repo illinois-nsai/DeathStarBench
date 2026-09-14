@@ -56,6 +56,7 @@ func main() {
 	log.Info().Msg("Consul agent initialized")
 
 	srv := &frontend.Server{
+		Config:     result,
 		KnativeDns: knativeDNS,
 		Registry:   registry,
 		Tracer:     tracer,

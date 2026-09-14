@@ -13,3 +13,8 @@ container:
 
 nodeSelector:
   type: stateful
+
+# Let Prometheus scrape the memcached-exporter sidecar.
+annotations: |
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9150"

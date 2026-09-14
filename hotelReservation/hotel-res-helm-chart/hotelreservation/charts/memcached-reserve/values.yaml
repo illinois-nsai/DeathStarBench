@@ -14,4 +14,17 @@ container:
 
 nodeSelector:
   type: stateful
-      
+
+# Keep this one memcached out of the service mesh.
+#
+# It is the hottest datastore on the search and reserve paths: CheckAvailability
+# issues a ~130-key multiget per request. With a sidecar in front, envoy burned
+# 650 millicores against memcached's own 204 and writes into it timed out.
+#
+# The cost is that istio_tcp_*_bytes_total no longer covers the
+# reservation -> memcached-reserve edge. mongodb and the other two memcached
+# instances stay in the mesh.
+annotations: |
+  sidecar.istio.io/inject: "false"
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9150"

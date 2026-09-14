@@ -8,7 +8,7 @@ ports:
     
 container:
   command: /go/bin/search
-  image: htliang/hotelreservation-remove-consul
+  image: library/hotelreservation-memcfix
   name: hotel-reserv-search
   ports:
   - containerPort: 8082

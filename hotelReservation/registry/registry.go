@@ -73,13 +73,26 @@ func getLocalIP() (string, error) {
 	return ipGrpc, nil
 }
 
-// Register a service with registry
+// Register a service with registry.
+//
+// Best-effort: a failure is logged and swallowed rather than returned. Nothing
+// in this benchmark reads the registry back - dialer.Dial hands the service name
+// straight to grpc.Dial, so peers are resolved by Kubernetes DNS, and
+// WithBalancer ignores the *consul.Client it is given. The helm chart leaves the
+// consul dependency switched off (Chart.yaml: condition: consul.enabled), so
+// returning the error here killed every service at startup with
+//
+//   failed register: Put "http://consul-hotelres:8500/...": no such host
+//
+// which is what the image this cluster previously ran, "remove-consul", exists
+// to avoid. If consul is ever enabled, registration simply starts succeeding.
 func (c *Client) Register(name string, id string, ip string, port int) error {
 	if ip == "" {
 		var err error
 		ip, err = getLocalIP()
 		if err != nil {
-			return err
+			log.Warn().Msgf("registry: cannot determine local ip, skipping registration: %v", err)
+			return nil
 		}
 	}
 	reg := &consul.AgentServiceRegistration{
@@ -89,10 +102,20 @@ func (c *Client) Register(name string, id string, ip string, port int) error {
 		Address: ip,
 	}
 	log.Info().Msgf("Trying to register service [ name: %s, id: %s, address: %s:%d ]", name, id, ip, port)
-	return c.Agent().ServiceRegister(reg)
+
+	if err := c.Agent().ServiceRegister(reg); err != nil {
+		log.Warn().Msgf("registry: service registration failed, continuing without it: %v", err)
+	}
+
+	return nil
 }
 
-// Deregister removes the service address from registry
+// Deregister removes the service address from registry. Best-effort, for the
+// same reason as Register.
 func (c *Client) Deregister(id string) error {
-	return c.Agent().ServiceDeregister(id)
+	if err := c.Agent().ServiceDeregister(id); err != nil {
+		log.Warn().Msgf("registry: deregistration failed: %v", err)
+	}
+
+	return nil
 }

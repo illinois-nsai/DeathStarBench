@@ -7,6 +7,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/bson"
+	"github.com/delimitrou/DeathStarBench/tree/master/hotelReservation/seed"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -47,7 +49,19 @@ func initializeDatabase(url string) (*mongo.Client, func()) {
 	log.Info().Msg("Successfully connected to MongoDB")
 
 	collection := client.Database("geo-db").Collection("geo")
-	_, err = collection.InsertMany(context.TODO(), newPoints)
+
+	if err := seed.EnsureUniqueIndex(context.TODO(), collection, "hotelId"); err != nil {
+		log.Panic().Msg(err.Error())
+	}
+
+	docs := make([]seed.Doc, 0, len(newPoints))
+	for _, item := range newPoints {
+		// `point` is the type name; do not shadow it with the loop variable.
+		pt := item.(point)
+		docs = append(docs, seed.Doc{Filter: bson.M{"hotelId": pt.Pid}, Value: pt})
+	}
+
+	err = seed.Upsert(context.TODO(), collection, docs)
 	if err != nil {
 		log.Fatal().Msg(err.Error())
 	}
