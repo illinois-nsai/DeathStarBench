@@ -10,6 +10,17 @@ container:
   name: hotel-reserv-rate-mmc
   ports:
   - containerPort: 11211
+  # Passed as flags, not env vars: the official memcached image ignores
+  # MEMCACHED_* (a Bitnami convention), so the previous env-based settings never
+  # reached the process. 64 MiB / 4 threads are memcached's own defaults and are
+  # what every sweep through 9/15 actually ran, verified from the exporter
+  # (memcached_limit_bytes=67108864). Stated explicitly so the chart matches
+  # reality and a future change here is visible rather than silently dropped.
+  args:
+  - "-m"
+  - "64"
+  - "-t"
+  - "4"
 
 nodeSelector:
   type: stateful

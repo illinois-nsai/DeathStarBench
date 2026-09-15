@@ -41,14 +41,21 @@ global:
         requests:
           cpu: 50m
           memory: 32Mi
-    environments:
-      # Back to the stock 128 MiB. Measured working set with the exporter:
-      # reserve 1596 items / 0.128 MiB, rate 65 / 0.335 MiB, profile 27 / 0.014
-      # MiB, and zero evictions on all three. 128 is ~1000x the working set, so
-      # the size is not what governs warm-up - the cache is warm once every key
-      # has been fetched once, which is a function of request rate, not capacity.
-      MEMCACHED_CACHE_SIZE: "128"
-      MEMCACHED_THREADS: "8"
+    # No `environments:` block here on purpose. MEMCACHED_CACHE_SIZE and
+    # MEMCACHED_THREADS were set at this level and were silently inert: this
+    # chart runs the OFFICIAL memcached image, whose entrypoint does not turn
+    # environment variables into flags - that is a Bitnami convention. So every
+    # experiment up to and including the 9/15 sweep ran memcached at its built-in
+    # defaults no matter what was declared here. Read back from the exporter
+    # mid-sweep, on all three instances:
+    #
+    #   memcached_limit_bytes     = 67108864   (64 MiB, not the declared 128)
+    #   memcached_max_connections = 1024       (the default)
+    #
+    # Sizing now goes through `args` on each memcached chart, which the image
+    # does honour. Those values are 64 MiB / 4 threads - deliberately the
+    # defaults that were already in force, so the chart now states what actually
+    # runs without changing behaviour or invalidating the existing sweeps.
   mongodb:
     persistentVolume:               # use hostPath or pvprovisioner
       enabled: false

@@ -12,6 +12,65 @@ Newest first.
 
 ---
 
+## 2026-09-15 — `MakeReservation` panicked on mongo errors and crash-looped the deployment
+
+The 9/12 pass converted every **memcached** error into a cache miss. It left two **mongo** error
+paths in `MakeReservation` still calling `log.Panic`, and that is the reserve-only code path —
+`search` reaches `CheckAvailability` but never this.
+
+```go
+// :174  capacity lookup, on a _cap cache miss
+log.Panic().Msgf("Tried to find hotelId [%v], but got error", hotelId, err.Error())
+// :213  one insert per booked night, up to 15 per request
+log.Panic().Msgf("Tried to insert hotel [hotelId %v], but got error", hotelId, err.Error())
+```
+
+At 7 replicas all seven pods write to a single `mongodb-reservation` — roughly 700 driver
+operations contending for one mongod against 300 at three replicas. Inserts begin timing out,
+and every timeout killed a pod.
+
+### What it looked like
+
+10 of the 168 experiments in the 9/15 sweep, all of them `reserve` at 7 replicas, load >= 2000,
+in both iterations: 12-70% of requests failing with grpc=14.
+
+The signature is only legible with both istio reporters. Source (frontend's envoy) reported
+`URX` alone — it reached reservation's envoy fine. Destination (reservation's own envoy)
+reported `URX,UF`: it could not connect to its **own app container on localhost**.
+
+cAdvisor container count per 15s, app container versus the sidecar beside it:
+
+| run | app containers present |
+|---|---|
+| reserve 4000rps **r3** (clean) | `3 3 3 3 3 3 3 3 3 3 3 3 3` |
+| search 6000rps **r7** (clean) | `7 7 7 7 7 7 7 7 7 7 7 7 7` |
+| **reserve 4000rps r7** (failing) | `7 7 7 4 1 1 6 1 6 1 1` |
+
+The sidecar reported 7/7 throughout in all three. One pod appeared as five distinct container
+instances inside a 210s run, each starting fresh at 3 MiB. `container_oom_events_total` was 0
+and memory peaked at 145 MiB of 1024, so this was the process exiting, not the kernel killing
+it — the app burned 4.41 millicores while its sidecar burned 3085.
+
+The two controls isolate it: same mix with fewer replicas is stable, and a heavier load at the
+same replica count but a different mix is stable. Only the intersection fails.
+
+### Fixed
+
+Both sites now log the error and return it, failing the request instead of the process. Ten
+corrupted experiments become ten experiments showing honest overload, which is a usable
+datapoint rather than a hole.
+
+Note on `:213`: earlier nights in that loop are already committed and there is no transaction,
+so a mid-loop return leaves a partial reservation. That is pre-existing; reporting the failure
+beats crashing and beats silently claiming success.
+
+Neither format string was ever valid — one verb, two arguments, so the panic message itself
+would have printed `%!(EXTRA string=...)`. Nothing upstream had exercised these paths. After
+the fix there are **no `log.Panic` or `panic(` calls left in any service**; the only remaining
+`log.Fatal` calls are startup bind failures, which should be fatal.
+
+---
+
 ## 2026-09-14 — a warm capacity cache made every hotel unavailable
 
 `CheckAvailability` built `cacheCap` under two different key shapes and read it under only one:
@@ -245,10 +304,31 @@ Every memcached error is now handled exactly like a cache miss, in all seven sit
 
 Not source, but shipped from here and required for any of the above to run.
 
-- `MEMCACHED_THREADS` 2 -> 8. Two threads fielded ~300k key lookups/s; throughput
-  931 -> 2312 req/s and mesh errors 19% -> 1.22%.
-- `MEMCACHED_CACHE_SIZE` 128 -> 1024 -> back to **128**. Measured working set is under 0.5 MiB
-  with zero evictions, so the size was never the lever — 128 is ~1000x the working set.
+- **`MEMCACHED_THREADS` and `MEMCACHED_CACHE_SIZE` never did anything — corrected 2026-09-15.**
+  Both were set as environment variables on the memcached containers. The chart runs the
+  **official** memcached image, whose entrypoint does not translate environment variables into
+  flags; that is a Bitnami convention. So the settings were silently dropped and every
+  experiment through the 9/15 sweep ran memcached at its built-in defaults. Read back from the
+  exporter mid-sweep, on all three instances:
+
+  ```
+  memcached_limit_bytes     = 67108864   (64 MiB, not the declared 128)
+  memcached_max_connections = 1024       (the default)
+  ```
+
+  The earlier entries here claimed `MEMCACHED_THREADS` 2 -> 8 took throughput from 931 to
+  2312 req/s and mesh errors from 19% to 1.22%. **That attribution is wrong** — the setting
+  never reached the process. The improvement came from other changes in the same window, most
+  likely the memcached-panic fix and removing the sidecar from `memcached-reserve`. The
+  cache-size reasoning (working set under 0.5 MiB, zero evictions) still holds and is in fact
+  why running at 64 MiB instead of the intended 128 changed nothing measurable.
+
+  Sizing now goes through `args` on each memcached chart, which the image does honour, and the
+  `environments` block is gone. Values are **64 MiB / 4 threads** — deliberately the defaults
+  already in force, so the chart states what actually runs without changing behaviour or
+  invalidating the existing sweeps. Verified against the image with a control probe:
+  `-m 64 -t 4` yields `maxbytes=67108864, num_threads=4`, and `-m 100 -t 6` yields
+  `104857600 / 6`, so the flags are honoured rather than merely accepted.
 - `sidecar.istio.io/inject: "false"` on `memcached-reserve`. Envoy burned 650 millicores against
   memcached's own 204 and the writes into it timed out. Costs
   `istio_tcp_*_bytes_total` on that one edge; mongodb and the other two memcached instances stay

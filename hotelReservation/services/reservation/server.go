@@ -171,7 +171,12 @@ func (s *Server) MakeReservation(ctx context.Context, req *pb.Request) (*pb.Resu
 			var num number
 			err = numCollection.FindOne(context.TODO(), &bson.D{{"hotelId", hotelId}}).Decode(&num)
 			if err != nil {
-				log.Panic().Msgf("Tried to find hotelId [%v], but got error", hotelId, err.Error())
+				// Fail this request, not the process. Capacity is unknown here, so
+				// the booking cannot be admitted safely - but panicking took down
+				// the pod and every in-flight reservation with it. See the note on
+				// the InsertOne below for what that cost.
+				log.Error().Msgf("Failed to get capacity for hotel %v: %v", hotelId, err)
+				return nil, fmt.Errorf("capacity lookup failed for hotel %v: %w", hotelId, err)
 			}
 			hotel_cap = int(num.Number)
 
@@ -210,7 +215,25 @@ func (s *Server) MakeReservation(ctx context.Context, req *pb.Request) (*pb.Resu
 			},
 		)
 		if err != nil {
-			log.Panic().Msgf("Tried to insert hotel [hotelId %v], but got error", hotelId, err.Error())
+			// Fail this request, not the process.
+			//
+			// This is the hottest write in the benchmark - one insert per booked
+			// night, up to 15 per request - and panicking here crash-looped the
+			// whole deployment under load. At 7 replicas driving a single
+			// mongodb-reservation, roughly 700 driver operations contend for one
+			// mongod; inserts start timing out, and every timeout killed a pod.
+			// Measured in the 9/15 sweep: the app container was destroyed and
+			// recreated ~5 times per pod per 3-minute run, its sidecar then could
+			// not reach it on localhost, and 12-70% of requests failed with
+			// grpc=14 / URX,UF. All ten failures were reserve at 7 replicas; the
+			// same mix at 3 replicas and search at 7 were both stable.
+			//
+			// Earlier nights in this loop are already committed - there is no
+			// transaction here - so returning leaves a partial reservation. That
+			// is pre-existing, and reporting the failure beats both crashing and
+			// silently claiming success.
+			log.Error().Msgf("Failed to insert reservation for hotel %v %v-%v: %v", hotelId, indate, outdate, err)
+			return nil, fmt.Errorf("reservation insert failed for hotel %v: %w", hotelId, err)
 		}
 		indate = outdate
 	}
