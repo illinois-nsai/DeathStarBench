@@ -261,7 +261,14 @@ func (s *Server) CheckAvailability(ctx context.Context, req *pb.Request) (*pb.Re
 	cacheCap := make(map[string]int)
 	for k, v := range cacheMemRes {
 		hotelCap, _ := strconv.Atoi(string(v.Value))
-		cacheCap[k] = hotelCap
+		// Key by the bare hotelId. cacheMemRes is keyed "<hotelId>_cap", while the
+		// mongo path below stores num.HotelId and both readers look up the bare
+		// id, so storing k verbatim made every cache-served capacity unreachable:
+		// the lookup missed, Go returned 0, and `count+RoomNumber <= 0` marked the
+		// hotel unavailable. With the capacity cache at a ~100% hit rate that
+		// emptied CheckAvailability's result, so search returned no hotels and
+		// GetProfiles was called with an empty id list.
+		cacheCap[strings.TrimSuffix(k, "_cap")] = hotelCap
 	}
 	if len(misKeys) > 0 {
 		queryMissKeys := []string{}

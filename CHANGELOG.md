@@ -12,6 +12,45 @@ Newest first.
 
 ---
 
+## 2026-09-14 — a warm capacity cache made every hotel unavailable
+
+`CheckAvailability` built `cacheCap` under two different key shapes and read it under only one:
+
+```go
+cacheCap[k] = hotelCap              // :264  k is "<hotelId>_cap"  (from memcached)
+cacheCap[num.HotelId] = num.Number  // :294  key is "<hotelId>"    (from mongo)
+...
+if val+int(req.RoomNumber) <= cacheCap[id]                     // :363  reads "<hotelId>"
+if count+int(req.RoomNumber) <= cacheCap[queryItem["hotelId"]] // :407  reads "<hotelId>"
+```
+
+Every capacity served from cache was therefore unreachable: the lookup missed, Go returned the
+zero value, and `count + RoomNumber <= 0` is false — so the hotel was marked unavailable. Only
+the cold-cache mongo path worked. With the capacity cache at a **1.000 hit rate** after the
+first seconds, `CheckAvailability` returned an empty list for the rest of every run.
+
+The cost is silent, because an empty result is a valid one. `searchHandler` passes
+`reservationResp.HotelId` straight into `GetProfiles`, so profile received an empty id list,
+and `gomemcache`'s `GetMulti` does no network I/O on an empty key set:
+
+| mix | frontend->profile response | profile memcached gets |
+|---|---|---|
+| recommend | 781.8 bytes/req | (not on this path) |
+| **search** | **41.8 bytes/req** — the empty floor | **0/s** |
+
+`memcached-profile` held 22 items written during the brief cold window and never read again.
+
+Fixed by keying the cache-sourced entries on the bare hotelId, `strings.TrimSuffix(k, "_cap")`,
+so all four sites agree.
+
+Upstream and pre-existing — identical in `illinois-nsai/hotelReservation-workspace` — and
+present in the pre-fix 9/14 sweep, so it is **not** a regression from the `rate` query fix
+below. Search measurements taken before this exercised five of the path's six hops, with
+profile a no-op; they remain internally comparable, since the same path ran in every
+experiment.
+
+---
+
 ## 2026-09-14 — seed data duplicated per replica, and `rate` read the whole collection
 
 **Replica count was silently changing the workload.** Both bugs corrupted every `search`
