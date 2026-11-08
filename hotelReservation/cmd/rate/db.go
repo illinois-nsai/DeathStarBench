@@ -124,7 +124,13 @@ func initializeDatabase(url string) (*mongo.Client, func()) {
 	uri := fmt.Sprintf("mongodb://%s", url)
 	log.Info().Msgf("Attempting connection to %v", uri)
 
-	opts := options.Client().ApplyURI(uri)
+	// Cap the connection pool. The driver defaults to 100 per client, so seven
+	// replicas opened up to 700 connections against a single mongod - which runs
+	// with the container default soft limit of 1024 file descriptors, shared with
+	// data files and the journal. It hit "Too many open files", stopped accepting
+	// connections and exited 14 mid-run; in-flight operations surfaced to the app
+	// as "incomplete read of message header". 50 keeps seven replicas near 350.
+	opts := options.Client().ApplyURI(uri).SetMaxPoolSize(50)
 	client, err := mongo.Connect(context.TODO(), opts)
 	if err != nil {
 		log.Panic().Msg(err.Error())

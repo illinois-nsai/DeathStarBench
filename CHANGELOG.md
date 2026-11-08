@@ -12,6 +12,55 @@ Newest first.
 
 ---
 
+## 2026-09-15 — an uncapped mongo connection pool killed mongod on its fd limit
+
+The trigger underneath the panic below. Fixing the panic stopped the *application* from dying;
+mongod was still dying on its own.
+
+No `maxPoolSize` was set at any of the eight `cmd/*/db.go` sites, so each client took the Go
+driver default of **100 connections**. Seven replicas therefore opened up to **700 connections
+to a single mongod**, which runs with the container runtime's default soft limit of **1024 file
+descriptors** — measured, not assumed:
+
+```
+$ docker run --rm mongo:latest sh -c 'grep -i "open files" /proc/1/limits'
+Max open files            1024                 524288               files
+```
+
+That budget is shared with data files and the journal, so 700 connections sits right at the
+edge, which is why it failed under load rather than immediately:
+
+```
+"Error accepting new connection on local endpoint",
+  "localEndpoint":"0.0.0.0:27017", "error":"Too many open files"
+
+mongodb-reservation: Error, restarts=2, exitCode 14
+```
+
+The client saw each severed connection as `incomplete read of message header`, which is exactly
+what `MakeReservation` then panicked on.
+
+Fixed by capping the pool at all eight sites:
+
+```go
+opts := options.Client().ApplyURI(uri).SetMaxPoolSize(50)
+```
+
+50 keeps seven replicas near 350 connections, roughly a third of the limit, leaving room for
+data files and bursts. The cap is real backpressure — requests queue in the client instead of
+exhausting mongod — which is the correct behaviour under overload and is what makes the
+saturation curve meaningful rather than a record of a datastore restarting.
+
+Raising mongod's limit instead was rejected: Kubernetes has no per-container ulimit, so it would
+need a privileged initContainer or a change to containerd's defaults on every node. Capping the
+client is smaller and fixes the cause rather than widening the symptom.
+
+**Verified after the panic fix but before this one:** all seven reservation pods held
+`restarts=0` while logging 63-78 insert failures each, so the two defects are independent and
+both were real. The panic fix is what makes this failure mode observable at all.
+
+---
+
 ## 2026-09-15 — `MakeReservation` panicked on mongo errors and crash-looped the deployment
 
 The 9/12 pass converted every **memcached** error into a cache miss. It left two **mongo** error
