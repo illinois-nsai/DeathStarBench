@@ -38,6 +38,19 @@ global:
       replica: redis-replicas
       enabled: false
   memcached:
+    # One exporter sidecar per standalone Memcached pod, matching Hotel Reservation.
+    exporter:
+      enabled: true
+      image: prom/memcached-exporter
+      imageVersion: v0.14.2
+      port: 9150
+      resources:
+        limits:
+          cpu: 200m
+          memory: 64Mi
+        requests:
+          cpu: 50m
+          memory: 32Mi
     cluster:
       enabled: false
       port: &memcached-cluster-port 5000

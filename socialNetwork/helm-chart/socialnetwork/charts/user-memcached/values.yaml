@@ -1,5 +1,6 @@
 name: user-memcached
 replicas: 1
+memcachedExporter: true
 
 ports:
   - port: 11211

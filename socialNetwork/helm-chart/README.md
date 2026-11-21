@@ -499,3 +499,19 @@ After uninstalling helm chart, PVCs created by Redis Cluster installation won't 
 ```bash
 for p in $(kubectl get pvc -o name -l app.kubernetes.io/name=redis-cluster); do kubectl delete $p; done
 ```
+
+## Memcached metrics
+
+The four standalone Memcached deployments (`user-memcached`,
+`post-storage-memcached`, `media-memcached`, and `url-shorten-memcached`) include a
+`prom/memcached-exporter:v0.14.2` sidecar, matching Hotel Reservation. It reads the
+local cache at `127.0.0.1:11211` and exposes `/metrics` on port `9150`. Pod
+annotations let the existing Prometheus `kubernetes-pods` job discover it; no
+additional NodePort or Prometheus scrape configuration is needed.
+
+The experiment profiler already collects commands by hit/miss status, evictions,
+current items, and current connections. Exporter resources are separate from the
+cache's resources: requests `50m` CPU / `32Mi`, limits `200m` CPU / `64Mi`.
+
+Defaults are under `global.memcached.exporter`. To disable both the sidecars and
+their scrape annotations, set `global.memcached.exporter.enabled=false`.

@@ -1,4 +1,5 @@
 {{- define "socialnetwork.templates.baseDeployment" }}
+{{- $exporter := and (.Values.memcachedExporter | default false) .Values.global.memcached.exporter.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,6 +16,12 @@ spec:
       labels:
         service: {{ .Values.name }}
         app: {{ .Values.name }}
+      {{- if $exporter }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.global.memcached.exporter.port | quote }}
+        prometheus.io/path: "/metrics"
+      {{- end }}
     spec:
       {{- include "socialnetwork.templates.scheduling" . | nindent 6 }}
       {{- if .Values.nodeName}}
@@ -62,6 +69,21 @@ spec:
         {{- end }}
         {{- end }}
       {{- end -}}
+      {{- if $exporter }}
+      {{- with .Values.global.memcached.exporter }}
+      - name: memcached-exporter
+        image: "{{ .image }}:{{ .imageVersion }}"
+        imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+        args:
+        - "--memcached.address=127.0.0.1:11211"
+        - "--web.listen-address=:{{ .port }}"
+        ports:
+        - name: http-metrics
+          containerPort: {{ .port }}
+        resources:
+          {{- toYaml .resources | nindent 10 }}
+      {{- end }}
+      {{- end }}
       {{- if $.Values.configMaps }}
       volumes:
       - name: {{ $.Values.name }}-config
