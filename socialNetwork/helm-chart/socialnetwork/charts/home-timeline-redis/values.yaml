@@ -1,4 +1,5 @@
 name: home-timeline-redis
+replicas: 1
 
 ports:
   - port: 6379

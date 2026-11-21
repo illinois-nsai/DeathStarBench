@@ -1,4 +1,5 @@
 name: user-memcached
+replicas: 1
 
 ports:
   - port: 11211

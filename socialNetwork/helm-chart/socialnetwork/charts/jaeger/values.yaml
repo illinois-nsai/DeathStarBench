@@ -1,4 +1,5 @@
 name: jaeger
+replicas: 1
 type: NodePort
 
 ports:

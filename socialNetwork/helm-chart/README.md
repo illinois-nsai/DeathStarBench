@@ -57,6 +57,14 @@ The following line shows a default deployment of Social Nework Microservices usi
 $ helm install RELEASE_NAME HELM_CHART_REPO_PATH
 ```
 
+### Frontend source checkout ###
+
+The `nginx-thrift` and `media-frontend` init containers clone
+`https://github.com/illinois-nsai/DeathStarBench.git`, branch `social-net`, using a
+shallow single-branch checkout. This selects their mounted source files; the
+existing container image settings are unchanged. Experiment runners may pin the
+checkout to a recorded commit from this branch for reproducibility.
+
 ### Node placement ###
 
 The standalone deployment follows `yinjie/hotel-res` scheduling:
@@ -108,6 +116,13 @@ $ helm install RELEASE_NAME HELM_CHART_REPO_PATH -n NAMESPACE
 ### Overriding default values ###
 
 #### Default replicas ####
+
+`global.replicas` sets the default count for application services. Standalone
+MongoDB, Redis, Memcached, and Jaeger explicitly default to `replicas: 1`, so they
+do not scale when `global.replicas` changes. Replica-count experiments should
+scale application services individually. Multiple independent datastore pods
+behind one Service do not enable database replication or shared cache state.
+
 ```
 $ helm install RELEASE_NAME HELM_CHART_REPO_PATH --set global.replicas=2
 ```

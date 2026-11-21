@@ -1,4 +1,5 @@
 name: url-shorten-mongodb
+replicas: 1
 
 ports:
   - port: 27017

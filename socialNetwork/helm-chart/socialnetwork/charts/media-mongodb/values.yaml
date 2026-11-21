@@ -1,4 +1,5 @@
 name: media-mongodb
+replicas: 1
 
 ports:
   - port: 27017

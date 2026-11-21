@@ -1,4 +1,5 @@
 name: user-timeline-mongodb
+replicas: 1
 
 ports:
   - port: 27017

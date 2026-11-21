@@ -1,4 +1,5 @@
 name: url-shorten-memcached
+replicas: 1
 
 ports:
   - port: 11211

@@ -1,4 +1,5 @@
 name: post-storage-memcached
+replicas: 1
 
 ports:
   - name: 11211
