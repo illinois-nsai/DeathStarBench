@@ -1,4 +1,5 @@
 name: jaeger
+type: NodePort
 
 ports:
   - port: 5775
@@ -14,6 +15,7 @@ ports:
     targetPort: 5778
   - port: 16686
     targetPort: 16686
+    nodePort: 32001
   - port: 14268
     targetPort: 14268
   - port: 9411
@@ -47,3 +49,8 @@ configMaps:
   - name: service-config.json
     mountPath: /social-network-microservices/config/service-config.json
     value: service-config
+
+nodeSelector:
+  type: stateful
+# Disable the global affinity that excludes stateful nodes for application pods.
+affinity: {}

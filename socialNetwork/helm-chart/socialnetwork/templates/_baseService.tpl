@@ -1,11 +1,12 @@
 {{- define "socialnetwork.templates.baseService" }}
+{{- $serviceType := .Values.type | default .Values.global.serviceType }}
 
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ .Values.name }}
 spec:
-  type: {{ .Values.type | default .Values.global.serviceType }}
+  type: {{ $serviceType }}
   ports:  
   {{- range .Values.ports }}
   - name: "{{ .port }}"
@@ -14,6 +15,9 @@ spec:
     protocol: {{ .protocol }}
     {{- end}}
     targetPort: {{ .targetPort }}
+    {{- if and .nodePort (eq $serviceType "NodePort") }}
+    nodePort: {{ .nodePort }}
+    {{- end }}
   {{- end}}
   selector:
     service: {{ .Values.name }} 

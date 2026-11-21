@@ -1,4 +1,14 @@
 global: 
+  # Application pods avoid the datastore node. Datastore/Jaeger subcharts override this.
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: type
+            operator: NotIn
+            values:
+            - stateful
   hpa:
     enabled: false
     minReplicas: 1

@@ -17,3 +17,8 @@ configMaps:
   - name: redis.conf
     mountPath: /social-network-microservices/config/redis.conf
     value: redis
+
+nodeSelector:
+  type: stateful
+# Disable the global affinity that excludes stateful nodes for application pods.
+affinity: {}

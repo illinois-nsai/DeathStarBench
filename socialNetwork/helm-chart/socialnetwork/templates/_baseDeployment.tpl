@@ -16,6 +16,7 @@ spec:
         service: {{ .Values.name }}
         app: {{ .Values.name }}
     spec:
+      {{- include "socialnetwork.templates.scheduling" . | nindent 6 }}
       {{- if .Values.nodeName}}
       nodeName: {{ .Values.nodeName }}
       {{ end }}

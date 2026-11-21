@@ -18,3 +18,8 @@ configMaps:
   - name: mongod.conf
     mountPath: /social-network-microservices/config/mongod.conf
     value: mongod
+
+nodeSelector:
+  type: stateful
+# Disable the global affinity that excludes stateful nodes for application pods.
+affinity: {}

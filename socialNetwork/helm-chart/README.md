@@ -57,6 +57,48 @@ The following line shows a default deployment of Social Nework Microservices usi
 $ helm install RELEASE_NAME HELM_CHART_REPO_PATH
 ```
 
+### Node placement ###
+
+The standalone deployment follows `yinjie/hotel-res` scheduling:
+
+- MongoDB, Memcached, Redis, and Jaeger use `nodeSelector: {type: stateful}`.
+- Application services, including both Nginx frontends, use required node affinity
+  excluding nodes labeled `type=stateful`.
+
+Here `type` is a Kubernetes **node label**, separate from Service `type: NodePort`.
+The grouped cluster setup already labels its datastore node (`node3`) this way.
+Check labels with `kubectl get nodes -L type`; without a matching stateful node,
+datastore pods remain Pending. These rules select compute nodes; they do not
+create persistent volumes or change datastore persistence.
+
+Both deployment templates support `nodeSelector`, `affinity`, and `tolerations`.
+Per-service values override `global` defaults; an explicit empty map/list disables
+that global setting for the service. Datastore and Jaeger subcharts set
+`affinity: {}` so they do not inherit the application rule excluding stateful nodes.
+Optional sharded/clustered dependency charts have their own placement settings.
+
+### Profiling endpoints ###
+
+The chart exposes the frontend and Jaeger query API through fixed NodePorts,
+matching the Hotel Reservation profiling setup:
+
+| Endpoint | Service port | NodePort |
+| --- | --- | --- |
+| Nginx frontend (`nginx-thrift`) | 8080 | 32000 |
+| Jaeger query API (`jaeger`) | 16686 | 32001 |
+
+Existing profiling clients can keep `--host 10.10.1.1`,
+`--prometheus_port 30090`, and `--jaeger_port 32001` when that node address is
+reachable. Prometheus is deployed separately by the cluster setup; this chart
+does not install it or change its port. Social Network's frontend Jaeger service
+name is `nginx-web-server`.
+
+NodePorts are allocated across the cluster, so these ports must be free even
+when benchmarks use different namespaces. Other services remain `ClusterIP` by
+default. To disable external frontend/Jaeger access, set
+`nginx-thrift.type=ClusterIP` and `jaeger.type=ClusterIP`; the template then omits
+their `nodePort` fields.
+
 ### Setting namespace ###
 
 ```

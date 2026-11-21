@@ -20,3 +20,8 @@ configMaps:
   - name: service-config.json
     mountPath: /social-network-microservices/config/service-config.json
     value: service-config
+
+nodeSelector:
+  type: stateful
+# Disable the global affinity that excludes stateful nodes for application pods.
+affinity: {}
