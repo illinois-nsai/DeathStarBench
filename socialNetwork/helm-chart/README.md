@@ -515,3 +515,12 @@ cache's resources: requests `50m` CPU / `32Mi`, limits `200m` CPU / `64Mi`.
 
 Defaults are under `global.memcached.exporter`. To disable both the sidecars and
 their scrape annotations, set `global.memcached.exporter.enabled=false`.
+
+## Datastore resources
+
+Standalone MongoDB, Memcached, and Redis main containers set `container.resources:
+{}` so CPU/memory requests and limits remain unset, matching Hotel Reservation's
+MongoDB/Memcached configuration. This overrides `global.resources`, including
+runner overlays. The four fields are absent rather than set to zero. Application
+and Jaeger resource defaults and the Memcached exporter's separate resources
+continue to apply to their respective containers.

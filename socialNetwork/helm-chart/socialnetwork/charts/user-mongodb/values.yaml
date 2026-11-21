@@ -6,6 +6,8 @@ ports:
     targetPort: 27017
  
 container:
+  # Leave datastore requests/limits unset instead of inheriting global.resources.
+  resources: {}
   args: 
   - --config
   - /social-network-microservices/config/mongod.conf

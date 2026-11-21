@@ -6,6 +6,8 @@ ports:
     targetPort: 6379
 
 container:
+  # Leave datastore requests/limits unset instead of inheriting global.resources.
+  resources: {}
   args: 
   - /social-network-microservices/config/redis.conf
   image: library/redis
