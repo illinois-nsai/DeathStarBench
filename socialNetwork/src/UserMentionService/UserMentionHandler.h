@@ -6,9 +6,15 @@
 #include <libmemcached/util.h>
 #include <mongoc.h>
 
+#include <cstdlib>
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "../../gen-cpp/UserMentionService.h"
 #include "../../gen-cpp/social_network_types.h"
 #include "../ClientPool.h"
+#include "../MemcachedReadGuard.h"
 #include "../logger.h"
 #include "../tracing.h"
 #include "../utils.h"
@@ -68,52 +74,48 @@ void UserMentionHandler::ComposeUserMentions(
       throw se;
     }
 
-    char **keys;
-    size_t *key_sizes;
-    keys = new char *[usernames.size()];
-    key_sizes = new size_t[usernames.size()];
-    int idx = 0;
-    for (auto &username : usernames) {
-      std::string key_str = username + ":user_id";
-      keys[idx] = new char[key_str.length() + 1];
-      strcpy(keys[idx], key_str.c_str());
-      key_sizes[idx] = key_str.length();
-      idx++;
+    MemcachedReadGuard client_guard(_memcached_client_pool, client);
+    std::vector<std::string> key_storage;
+    std::vector<const char *> keys;
+    std::vector<size_t> key_sizes;
+    key_storage.reserve(usernames.size());
+    keys.reserve(usernames.size());
+    key_sizes.reserve(usernames.size());
+    for (const auto &username : usernames) {
+      key_storage.emplace_back(username + ":user_id");
+      keys.emplace_back(key_storage.back().c_str());
+      key_sizes.emplace_back(key_storage.back().size());
     }
 
     auto get_span = opentracing::Tracer::Global()->StartSpan(
         "compose_user_mentions_memcached_get_client",
         {opentracing::ChildOf(&span->context())});
-    rc = memcached_mget(client, keys, key_sizes, usernames.size());
+    rc = memcached_mget(client, keys.data(), key_sizes.data(), keys.size());
     if (rc != MEMCACHED_SUCCESS) {
       LOG(error) << "Cannot get usernames of request " << req_id << ": "
                  << memcached_strerror(client, rc);
       ServiceException se;
       se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
       se.message = memcached_strerror(client, rc);
-      memcached_pool_push(_memcached_client_pool, client);
       get_span->Finish();
       throw se;
     }
 
     char return_key[MEMCACHED_MAX_KEY];
     size_t return_key_length;
-    char *return_value;
     size_t return_value_length;
     uint32_t flags;
 
     while (true) {
-      return_value = memcached_fetch(client, return_key, &return_key_length,
-                                     &return_value_length, &flags, &rc);
+      std::unique_ptr<char, decltype(&std::free)> return_value(
+          memcached_fetch(client, return_key, &return_key_length,
+                          &return_value_length, &flags, &rc), &std::free);
       if (return_value == nullptr) {
         LOG(debug) << "Memcached mget finished "
                    << memcached_strerror(client, rc);
         break;
       }
       if (rc != MEMCACHED_SUCCESS) {
-        free(return_value);
-        memcached_quit(client);
-        memcached_pool_push(_memcached_client_pool, client);
         LOG(error) << "Cannot get components of request " << req_id;
         ServiceException se;
         se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
@@ -128,19 +130,12 @@ void UserMentionHandler::ComposeUserMentions(
           username.substr(0, username.length() - std::strlen(":user_id"));
       new_user_mention.username = username;
       new_user_mention.user_id = std::stoul(
-          std::string(return_value, return_value + return_value_length));
+          std::string(return_value.get(), return_value_length));
       user_mentions.emplace_back(new_user_mention);
       usernames_not_cached.erase(username);
-      free(return_value);
     }
-    memcached_quit(client);
-    memcached_pool_push(_memcached_client_pool, client);
+    client_guard.Release(rc);
     get_span->Finish();
-    for (int i = 0; i < usernames.size(); ++i) {
-      delete keys[i];
-    }
-    delete[] keys;
-    delete[] key_sizes;
 
     // Find the rest in MongoDB
     if (!usernames_not_cached.empty()) {
@@ -167,7 +162,7 @@ void UserMentionHandler::ComposeUserMentions(
       bson_t query_child_0;
       bson_t query_username_list;
       const char *key;
-      idx = 0;
+      int idx = 0;
       char buf[16];
 
       BSON_APPEND_DOCUMENT_BEGIN(query, "username", &query_child_0);

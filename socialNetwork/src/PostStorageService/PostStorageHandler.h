@@ -6,12 +6,16 @@
 #include <libmemcached/util.h>
 #include <mongoc.h>
 
+#include <cstdlib>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <vector>
 
 #include "../../gen-cpp/PostStorageService.h"
+#include "../MemcachedReadGuard.h"
 #include "../logger.h"
 #include "../tracing.h"
 
@@ -387,50 +391,45 @@ void PostStorageHandler::ReadPosts(
     throw se;
   }
 
-  char **keys;
-  size_t *key_sizes;
-  keys = new char *[post_ids.size()];
-  key_sizes = new size_t[post_ids.size()];
-  int idx = 0;
-  for (auto &post_id : post_ids) {
-    std::string key_str = std::to_string(post_id);
-    keys[idx] = new char[key_str.length() + 1];
-    strcpy(keys[idx], key_str.c_str());
-    key_sizes[idx] = key_str.length();
-    idx++;
+  MemcachedReadGuard client_guard(_memcached_client_pool, memcached_client);
+  std::vector<std::string> key_storage;
+  std::vector<const char *> keys;
+  std::vector<size_t> key_sizes;
+  key_storage.reserve(post_ids.size());
+  keys.reserve(post_ids.size());
+  key_sizes.reserve(post_ids.size());
+  for (auto post_id : post_ids) {
+    key_storage.emplace_back(std::to_string(post_id));
+    keys.emplace_back(key_storage.back().c_str());
+    key_sizes.emplace_back(key_storage.back().size());
   }
   memcached_rc =
-      memcached_mget(memcached_client, keys, key_sizes, post_ids.size());
+      memcached_mget(memcached_client, keys.data(), key_sizes.data(), keys.size());
   if (memcached_rc != MEMCACHED_SUCCESS) {
     LOG(error) << "Cannot get post_ids of request " << req_id << ": "
                << memcached_strerror(memcached_client, memcached_rc);
     ServiceException se;
     se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
     se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
     throw se;
   }
 
   char return_key[MEMCACHED_MAX_KEY];
   size_t return_key_length;
-  char *return_value;
   size_t return_value_length;
   uint32_t flags;
   auto get_span = opentracing::Tracer::Global()->StartSpan(
       "post_storage_mmc_mget_client", {opentracing::ChildOf(&span->context())});
 
   while (true) {
-    return_value =
+    std::unique_ptr<char, decltype(&std::free)> return_value(
         memcached_fetch(memcached_client, return_key, &return_key_length,
-                        &return_value_length, &flags, &memcached_rc);
+                        &return_value_length, &flags, &memcached_rc), &std::free);
     if (return_value == nullptr) {
       LOG(debug) << "Memcached mget finished";
       break;
     }
     if (memcached_rc != MEMCACHED_SUCCESS) {
-      free(return_value);
-      memcached_quit(memcached_client);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
       LOG(error) << "Cannot get posts of request " << req_id;
       ServiceException se;
       se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
@@ -439,7 +438,7 @@ void PostStorageHandler::ReadPosts(
     }
     Post new_post;
     json post_json = json::parse(
-        std::string(return_value, return_value + return_value_length));
+        std::string(return_value.get(), return_value_length));
     new_post.req_id = post_json["req_id"];
     new_post.timestamp = post_json["timestamp"];
     new_post.post_id = post_json["post_id"];
@@ -467,16 +466,9 @@ void PostStorageHandler::ReadPosts(
     }
     return_map.insert(std::make_pair(new_post.post_id, new_post));
     post_ids_not_cached.erase(new_post.post_id);
-    free(return_value);
   }
   get_span->Finish();
-  memcached_quit(memcached_client);
-  memcached_pool_push(_memcached_client_pool, memcached_client);
-  for (int i = 0; i < post_ids.size(); ++i) {
-    delete keys[i];
-  }
-  delete[] keys;
-  delete[] key_sizes;
+  client_guard.Release(memcached_rc);
 
   std::vector<std::future<void>> set_futures;
   std::map<int64_t, std::string> post_json_map;
@@ -504,7 +496,7 @@ void PostStorageHandler::ReadPosts(
     bson_t query_child;
     bson_t query_post_id_list;
     const char *key;
-    idx = 0;
+    int idx = 0;
     char buf[16];
 
     BSON_APPEND_DOCUMENT_BEGIN(query, "post_id", &query_child);
