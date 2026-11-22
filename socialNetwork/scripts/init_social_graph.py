@@ -4,6 +4,7 @@ import os
 import string
 import random
 import argparse
+import time
 
 
 async def upload_follow(session, addr, user_0, user_1):
@@ -73,40 +74,50 @@ def printResults(results):
       print('Failed:', count, 'Error:', result_type.strip())
 
 
+async def run_bounded(items, operation, limit):
+  """Keep a fixed number of requests in flight without per-batch barriers."""
+  if limit < 1:
+    raise ValueError("Concurrency must be positive")
+  pending = iter(items)
+  results = []
+
+  async def worker():
+    for item in pending:
+      results.append(await operation(item))
+
+  workers = [asyncio.create_task(worker()) for _ in range(limit)]
+  try:
+    await asyncio.gather(*workers)
+  except BaseException:
+    for task in workers:
+      task.cancel()
+    await asyncio.gather(*workers, return_exceptions=True)
+    raise
+  return results
+
+
 async def register(addr, nodes, limit=200):
-  tasks = []
+  started = time.monotonic()
   conn = aiohttp.TCPConnector(limit=limit)
   async with aiohttp.ClientSession(connector=conn) as session:
     print('Registering Users...')
-    for i in range(nodes):
-      task = asyncio.ensure_future(upload_register(session, addr, str(i)))
-      tasks.append(task)
-      if i % limit == 0:
-        _ = await asyncio.gather(*tasks)
-        print(i)
-    results = await asyncio.gather(*tasks)
+    results = await run_bounded(range(nodes),
+        lambda user: upload_register(session, addr, str(user)), limit)
     printResults(results)
+  print('Register elapsed seconds:', round(time.monotonic() - started, 3))
+  return all(result == '' or result.startswith('Success') for result in results)
 
 
 async def follow(addr, edges, limit=200):
-  idx = 0
-  tasks = []
+  started = time.monotonic()
   conn = aiohttp.TCPConnector(limit=limit)
   async with aiohttp.ClientSession(connector=conn) as session:
     print('Adding follows...')
-    for edge in edges:
-      task = asyncio.ensure_future(
-          upload_follow(session, addr, edge[0], edge[1]))
-      tasks.append(task)
-      task = asyncio.ensure_future(
-          upload_follow(session, addr, edge[1], edge[0]))
-      tasks.append(task)
-      idx += 1
-      if idx % limit == 0:
-        _ = await asyncio.gather(*tasks)
-        print(idx)
-    results = await asyncio.gather(*tasks)
+    directed = (pair for a, b in edges for pair in ((a, b), (b, a)))
+    results = await run_bounded(directed,
+        lambda pair: upload_follow(session, addr, *pair), limit)
     printResults(results)
+  print('Follow elapsed seconds:', round(time.monotonic() - started, 3))
 
 
 async def compose(addr, nodes, limit=200):
@@ -140,6 +151,8 @@ if __name__ == '__main__':
                       help='intialize with up to 20 posts per user', default=False)
   parser.add_argument('--limit', type=int, help='total number simultaneous connections', default=200)
   args = parser.parse_args()
+  if args.limit < 1:
+    parser.error("--limit must be positive")
 
   with open(os.path.join('datasets/social-graph', args.graph, f'{args.graph}.nodes'), 'r') as f:
     nodes = getNumNodes(f)
@@ -152,7 +165,8 @@ if __name__ == '__main__':
   limit = args.limit
   loop = asyncio.new_event_loop()
   future = asyncio.ensure_future(register(addr, nodes, limit), loop=loop)
-  loop.run_until_complete(future)
+  if not loop.run_until_complete(future):
+    parser.exit(1, "Registration failed; follow creation was not started.\n")
   future = asyncio.ensure_future(follow(addr, edges, limit), loop=loop)
   loop.run_until_complete(future)
   if args.compose:
