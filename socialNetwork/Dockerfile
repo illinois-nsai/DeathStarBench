@@ -2,8 +2,11 @@ FROM yg397/thrift-microservice-deps:xenial AS builder
 
 ARG LIB_REDIS_PLUS_PLUS_VERSION=1.2.3
 
+COPY patches/redis-pool-unlock.patch /tmp/redis-pool-unlock.patch
+
 # Apply patch and re-install Redis plus plus
 RUN cd /tmp/redis-plus-plus\
+&& patch -p1 < /tmp/redis-pool-unlock.patch \
 && sed -i '/Transaction transaction/i\\    ShardsPool* get_shards_pool(){\n        return &_pool;\n    }\n' \
    src/sw/redis++/redis_cluster.h \
 && cmake -DREDIS_PLUS_PLUS_USE_TLS=ON . \

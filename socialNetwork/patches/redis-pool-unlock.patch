@@ -1,0 +1,54 @@
+--- a/src/sw/redis++/connection_pool.cpp
++++ b/src/sw/redis++/connection_pool.cpp
+@@ -76,16 +76,29 @@
+ Connection ConnectionPool::fetch() {
+     std::unique_lock<std::mutex> lock(_mutex);
+ 
+-    if (_pool.empty()) {
++    while (_pool.empty()) {
+         if (_used_connections == _pool_opts.size) {
+             _wait_for_connection(lock);
+         } else {
+-            // Lazily create a new connection.
+-            auto connection = _create();
+-
++            // Reserve capacity while locked, but never hold the pool mutex
++            // across DNS, TCP, TLS or authentication. Slow connection creation
++            // must not prevent other callers from returning healthy clients.
++            auto opts = _opts;
++            auto sentinel = _sentinel;
+             ++_used_connections;
+-
+-            return connection;
++            lock.unlock();
++            try {
++                if (sentinel) {
++                    return _create(sentinel, opts, false);
++                }
++                return Connection(opts);
++            } catch (...) {
++                lock.lock();
++                --_used_connections;
++                lock.unlock();
++                _cv.notify_one();
++                throw;
++            }
+         }
+     }
+ 
+@@ -237,13 +250,13 @@
+         // Wait until _pool is no longer empty or timeout.
+         if (!_cv.wait_for(lock,
+                     timeout,
+-                    [this] { return !(this->_pool).empty(); })) {
++                    [this] { return !this->_pool.empty() || this->_used_connections < this->_pool_opts.size; })) {
+             throw Error("Failed to fetch a connection in "
+                     + std::to_string(timeout.count()) + " milliseconds");
+         }
+     } else {
+         // Wait forever.
+-        _cv.wait(lock, [this] { return !(this->_pool).empty(); });
++        _cv.wait(lock, [this] { return !this->_pool.empty() || this->_used_connections < this->_pool_opts.size; });
+     }
+ }
+ 
